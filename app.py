@@ -1,66 +1,93 @@
 import gradio as gr
 import chess
-import gradio as gr
-import chess
 import chess.svg
 import chess.engine
-import time
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 
 class ChessApp:
     def __init__(self):
         self.board = chess.Board()
-        self.engine_path = 'stockfish/stockfish-windows-x86-64-avx2.exe'  # Ensure this path is correct
+        self.engine_path = 'stockfish/stockfish-windows-x86-64-avx2.exe'  # Make sure this path is correct
         self.engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
+        self.player_probabilities = []
+        self.ai_probabilities = []
 
     def draw_chessboard(self):
         svg = chess.svg.board(self.board)
         return f"<div style='width: 400px; height: 400px;'>{svg}</div>"
 
+    def eval_to_probability(self, pov_score):
+        # First, check if the position is a checkmate.
+        if pov_score.is_mate():
+            # If a mate is found, return 100% probability for the player who has the mate.
+            return (1.0, 0.0) if pov_score.mate() > 0 else (0.0, 1.0)
+
+        # Now handle the normal cp() case:
+        cp = pov_score.pov(self.board.turn).cp()
+        if cp is None:
+            # If cp is None, there's no clear advantage, treat the game as balanced.
+            return (0.5, 0.5)
+
+        # Calculate probability using the logistic function based on cp
+        probability = 1 / (1 + np.exp(-0.004 * cp))
+        # Return probabilities for both players, considering the turn.
+        return (probability, 1 - probability) if self.board.turn == chess.WHITE else (1 - probability, probability)
+
+
+
+    def get_evaluation(self):
+        info = self.engine.analyse(self.board, chess.engine.Limit(depth=20))
+        return info['score']
+
     def make_move(self, move):
         if move:
             try:
-                # Player makes a move
                 self.board.push_san(move)
-                move_status = "Move successful"
+                move_status = "Player move successful"
             except ValueError:
                 return self.draw_chessboard(), "Invalid move", None
 
-        # After the player's move, check if the game is over
         if not self.board.is_game_over():
-            # AI makes a move
             result = self.engine.play(self.board, chess.engine.Limit(time=0.1))
             self.board.push(result.move)
             move_status += f", AI moved: {result.move}"
 
-        graph = self.plot_sample_graph()  # Generate the graph after each move
+        eval = self.get_evaluation()
+        player_prob, ai_prob = self.eval_to_probability(eval)
+        self.player_probabilities.append(player_prob)
+        self.ai_probabilities.append(ai_prob)
+        
+        graph = self.plot_probabilities()
+        
         return self.draw_chessboard(), move_status, graph
 
-    def plot_sample_graph(self):
-        # Generate a simple line graph
-        x = np.linspace(0, 10, 100)
-        y = np.sin(x)
-        plt.figure(figsize=(5, 3))
-        plt.plot(x, y)
-        plt.title("Sample Sine Wave")
-        plt.xlabel("Time")
-        plt.ylabel("Amplitude")
+    def plot_probabilities(self):
+        plt.figure(figsize=(10, 5))
+        plt.plot(self.player_probabilities, label='Player Win Probability')
+        plt.plot(self.ai_probabilities, label='AI Win Probability')
+        plt.title('Winning Probability Over Time')
+        plt.xlabel('Move Number')
+        plt.ylabel('Probability')
+        plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.close()
+        plt.close()  # Prevent it from displaying in another window
         return plt
 
     def undo_move(self):
         if len(self.board.move_stack) > 0:
             self.board.pop()  # Undo AI move
-            if len(self.board.move_stack) > 0:
-                self.board.pop()  # Undo player move
-        return self.draw_chessboard(), "Move undone", None
+            self.board.pop()  # Undo player move
+            self.player_probabilities.pop()
+            self.ai_probabilities.pop()
+        return self.draw_chessboard(), "Move undone", self.plot_probabilities()
 
     def reset_board(self):
         self.board.reset()
-        return self.draw_chessboard(), "Board reset", None
+        self.player_probabilities.clear()
+        self.ai_probabilities.clear()
+        return self.draw_chessboard(), "Board reset", self.plot_probabilities()
 
 app = ChessApp()
 
